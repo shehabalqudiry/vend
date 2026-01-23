@@ -16,14 +16,14 @@ export default function CustomersScreen() {
     const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
     const [paymentAmount, setPaymentAmount] = useState('');
     const [collectModalVisible, setCollectModalVisible] = useState(false);
-    const [paymentHistory, setPaymentHistory] = useState([]);
+    const [paymentHistory, setPaymentHistory] = useState<any[]>([]);
     const [historyModalVisible, setHistoryModalVisible] = useState(false);
 
     const fetchPaymentHistory = async (customerId: number) => {
         const result = await db.getAllAsync(
             'SELECT * FROM debt_payments WHERE customer_id = ? ORDER BY payment_date DESC',
             [customerId]
-        );
+        ) as any[];
         setPaymentHistory(result);
         setHistoryModalVisible(true);
     };

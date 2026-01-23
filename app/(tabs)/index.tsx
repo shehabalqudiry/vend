@@ -1,205 +1,138 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Modal, FlatList } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Colors } from '../../constants/theme';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
-import * as Print from 'expo-print';
-import db from '../../database/db';
-import { useIsFocused } from '@react-navigation/native';
+import { useSQLiteContext } from 'expo-sqlite';
+import { useFocusEffect } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function HomeScreen() {
-  const theme = Colors.dark;
   const router = useRouter();
-  const isFocused = useIsFocused();
+  const db = useSQLiteContext();
+  const [summary, setSummary] = useState({
+    todaySales: 0,
+    totalDebt: 0,
+    lowStockCount: 0
+  });
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [stats, setStats] = useState({ total: 0, count: 0 });
-  const [recentSales, setRecentSales] = useState<any[]>([]);
-  const [detailModalVisible, setDetailModalVisible] = useState(false);
-  const [selectedSale, setSelectedSale] = useState<any>(null);
-  const [saleItems, setSaleItems] = useState<any[]>([]);
+  const fetchDashboardData = async () => {
+    const today = new Date().toISOString().split('T')[0];
+    
+    // 1. مبيعات اليوم
+    const salesRow = await db.getFirstAsync("SELECT SUM(total_amount) as total FROM sales WHERE date LIKE ?", [`${today}%`]);
+    // 2. إجمالي الديون المستحقة على العملاء
+    const debtRow = await db.getFirstAsync("SELECT SUM(total_debt) as total FROM customers");
+    // 3. منتجات أوشكت على النفاذ (أقل من 5 قطع مثلاً)
+    const stockRow = await db.getFirstAsync("SELECT COUNT(*) as count FROM products WHERE stock < 5");
 
-  const fetchData = () => {
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const salesToday = db.getFirstSync(
-        "SELECT SUM(total_amount) as total, COUNT(id) as count FROM sales WHERE date LIKE ?",
-        [`${today}%`]
-      ) as { total: number, count: number };
-
-      setStats({ total: salesToday?.total || 0, count: salesToday?.count || 0 });
-
-      const lastSales = db.getAllSync("SELECT * FROM sales ORDER BY id DESC LIMIT 5") as any[];
-      setRecentSales(lastSales);
-    } catch (error) {
-      console.error(error);
-    }
+    setSummary({
+      todaySales: (salesRow as any)?.total || 0,
+      totalDebt: (debtRow as any)?.total || 0,
+      lowStockCount: (stockRow as any)?.count || 0
+    });
   };
 
-  useEffect(() => {
-    if (isFocused) fetchData();
-  }, [isFocused]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchDashboardData();
+    }, [])
+  );
 
-  const handleOpenDetails = (sale: any) => {
-    const items = db.getAllSync(
-      `SELECT si.*, p.name, p.unit FROM sale_items si 
-       JOIN products p ON si.product_id = p.id WHERE si.sale_id = ?`,
-      [sale.id]
-    ) as any[];
-    setSelectedSale(sale);
-    setSaleItems(items);
-    setDetailModalVisible(true);
-  };
-
-  const handlePrint = async () => {
-    const html = `
-      <html dir="rtl">
-        <body style="font-family: Arial; padding: 20px;">
-          <h2 style="text-align:center;">فاتورة مبيعات #${selectedSale.id}</h2>
-          <p>التاريخ: ${new Date(selectedSale.date).toLocaleString('ar-EG')}</p>
-          <hr/>
-          <table style="width:100%; text-align:right;">
-            <tr><th>الصنف</th><th>الكمية</th><th>السعر</th></tr>
-            ${saleItems.map(i => `<tr><td>${i.name}</td><td>${i.quantity}</td><td>${i.price_at_sale}</td></tr>`).join('')}
-          </table>
-          <hr/>
-          <h3>الإجمالي: ${selectedSale.total_amount} ج.م</h3>
-        </body>
-      </html>
-    `;
-    await Print.printAsync({ html });
-  };
+  const QuickAction = ({ title, icon, color, route }: any) => (
+    <TouchableOpacity 
+      style={styles.actionCard} 
+      onPress={() => router.push(route)}
+    >
+      <View style={[styles.iconContainer, { backgroundColor: color + '22' }]}>
+        <Ionicons name={icon} size={28} color={color} />
+      </View>
+      <Text style={styles.actionTitle}>{title}</Text>
+    </TouchableOpacity>
+  );
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        
-        <View style={styles.header}>
-          <Text style={[styles.welcomeText, { color: theme.textSecondary }]}>مرحباً بك،</Text>
-          <Text style={[styles.mainTitle, { color: theme.text }]}>لوحة التحكم</Text>
+    <ScrollView 
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchDashboardData} tintColor="#00E676" />}
+    >
+      {/* Header بخش */}
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.welcomeText}>أهلاً بك في</Text>
+          <Text style={styles.appName}>فِند VEND</Text>
         </View>
+        <TouchableOpacity style={styles.profileBtn}>
+          <Ionicons name="person-circle-outline" size={40} color="#fff" />
+        </TouchableOpacity>
+      </View>
 
-        <View style={[styles.mainStatsCard, { backgroundColor: theme.tint }]}>
-          <Text style={styles.mainStatsLabel}>إجمالي مبيعات اليوم</Text>
-          <Text style={styles.mainStatsValue}>{stats.total.toFixed(2)} ج.م</Text>
-          <Text style={styles.subStatsText}>{stats.count} عملية ناجحة اليوم</Text>
-        </View>
-
-        <View style={styles.quickActions}>
-          <TouchableOpacity style={[styles.actionBtn, { backgroundColor: theme.card }]} onPress={() => router.push('/products')}>
-            <Ionicons name="cube" size={24} color={theme.tint} />
-            <Text style={[styles.actionBtnText, { color: theme.text }]}>المخزون</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.actionBtn, { backgroundColor: theme.card }]} onPress={() => router.push('/add-sale')}>
-            <Ionicons name="barcode" size={24} color={theme.tint} />
-            <Text style={[styles.actionBtnText, { color: theme.text }]}>بيع جديد</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.sectionHeader}>
-          <TouchableOpacity onPress={() => router.push('/reports')}><Text style={{ color: theme.tint }}>الكل</Text></TouchableOpacity>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>أحدث العمليات</Text>
-        </View>
-
-        {recentSales.map((item) => (
-          <TouchableOpacity 
-            key={item.id} 
-            style={[styles.saleCard, { backgroundColor: theme.card }]}
-            onPress={() => handleOpenDetails(item)}
-          >
-            <View style={styles.priceTag}>
-              <Text style={[styles.amountText, { color: theme.tint }]}>{item.total_amount.toFixed(2)}</Text>
-              <Text style={{ color: theme.textSecondary, fontSize: 10 }}>ج.م</Text>
-            </View>
-            <View style={styles.saleInfo}>
-              <Text style={[styles.saleId, { color: theme.text }]}>فاتورة #{item.id}</Text>
-              <View style={styles.dateRow}>
-                <Text style={[styles.dateText, { color: theme.textSecondary }]}>
-                  {new Date(item.date).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'})}
-                </Text>
-                <Ionicons name="time-outline" size={14} color={theme.textSecondary} />
-              </View>
-            </View>
-            <View style={[styles.statusBadge, { backgroundColor: 'rgba(0, 230, 118, 0.1)' }]}>
-              <Ionicons name="chevron-back" size={18} color={theme.tint} />
-            </View>
-          </TouchableOpacity>
-        ))}
-
-      </ScrollView>
-
-      <Modal visible={detailModalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setDetailModalVisible(false)}><Ionicons name="close" size={28} color={theme.text} /></TouchableOpacity>
-              <Text style={[styles.modalTitle, { color: theme.text }]}>تفاصيل الفاتورة</Text>
-              <View style={{width: 28}}/>
-            </View>
-            
-            <FlatList
-              data={saleItems}
-              renderItem={({ item }) => (
-                <View style={styles.itemRow}>
-                  <Text style={[styles.itemTotal, { color: theme.tint }]}>{(item.quantity * item.price_at_sale).toFixed(2)}</Text>
-                  <View style={{ alignItems: 'flex-end', flex: 1, marginRight: 10 }}>
-                    <Text style={[styles.itemName, { color: theme.text }]}>{item.name}</Text>
-                    <Text style={{ color: theme.textSecondary, fontSize: 12 }}>{item.quantity} {item.unit} × {item.price_at_sale}</Text>
-                  </View>
-                </View>
-              )}
-            />
-
-            <View style={[styles.modalFooter, { borderTopColor: theme.border }]}>
-              <Text style={[styles.finalPrice, { color: theme.tint }]}>{selectedSale?.total_amount.toFixed(2)} ج.م</Text>
-              <TouchableOpacity style={[styles.printBtn, { backgroundColor: theme.tint }]} onPress={handlePrint}>
-                <Text style={styles.printBtnText}>طباعة</Text>
-                <Ionicons name="print" size={22} color="#000" />
-              </TouchableOpacity>
-            </View>
+      {/* كروت الملخص السريع */}
+      <View style={styles.summaryContainer}>
+        <View style={styles.mainSummaryCard}>
+          <Text style={styles.summaryLabel}>مبيعات اليوم</Text>
+          <Text style={styles.summaryValue}>{summary.todaySales.toLocaleString()} ج.م</Text>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>مباشر</Text>
           </View>
         </View>
-      </Modal>
-    </SafeAreaView>
+
+        <View style={styles.row}>
+          <View style={[styles.subCard, { borderLeftColor: '#FF5252', borderLeftWidth: 4 }]}>
+            <Text style={styles.subLabel}>ديون العملاء</Text>
+            <Text style={[styles.subValue, { color: '#FF5252' }]}>{summary.totalDebt} ج.م</Text>
+          </View>
+          <View style={[styles.subCard, { borderLeftColor: '#FFC107', borderLeftWidth: 4 }]}>
+            <Text style={styles.subLabel}>نواقص المخزن</Text>
+            <Text style={[styles.subValue, { color: '#FFC107' }]}>{summary.lowStockCount} أصناف</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* أزرار الوصول السريع */}
+      <Text style={styles.sectionTitle}>الوصول السريع</Text>
+      <View style={styles.actionsGrid}>
+        <QuickAction title="فاتورة جديدة" icon="cart-outline" color="#00E676" route="/(tabs)/add-sale" />
+        <QuickAction title="العملاء والديون" icon="people-outline" color="#448AFF" route="/(tabs)/customers" />
+        <QuickAction title="المخزن" icon="cube-outline" color="#FF9800" route="/(tabs)/products" />
+        <QuickAction title="التقارير" icon="bar-chart-outline" color="#E91E63" route="/(tabs)/reports" />
+      </View>
+
+      {/* نصيحة ذكية */}
+      {/* <View style={styles.tipCard}>
+        <Ionicons name="bulb-outline" size={24} color="#00E676" />
+        <Text style={styles.tipText}>
+          لديك {summary.lowStockCount} منتجات قاربت على النفاذ، قم بمراجعة المخزن وتحديث الكميات.
+        </Text>
+      </View> */}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 100 },
-  header: { marginBottom: 20, alignItems: 'flex-end' },
-  welcomeText: { fontSize: 14 },
-  mainTitle: { fontSize: 26, fontWeight: 'bold' },
-  mainStatsCard: { padding: 25, borderRadius: 25, marginBottom: 25 },
-  mainStatsLabel: { color: '#000', fontSize: 15, opacity: 0.7 },
-  mainStatsValue: { color: '#000', fontSize: 32, fontWeight: 'bold' },
-  subStatsText: { color: '#000', fontSize: 12, marginTop: 5, fontWeight: '600', opacity: 0.6 },
-  quickActions: { flexDirection: 'row', gap: 15, marginBottom: 30 },
-  actionBtn: { flex: 1, padding: 18, borderRadius: 20, alignItems: 'center', gap: 8 },
-  actionBtnText: { fontWeight: 'bold' },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  sectionTitle: { fontSize: 18, fontWeight: 'bold' },
+  container: { flex: 1, backgroundColor: '#000', padding: 20 },
+  header: { flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center', marginTop: 40, marginBottom: 30 },
+  welcomeText: { color: '#666', fontSize: 16, textAlign: 'right' },
+  appName: { color: '#fff', fontSize: 28, fontWeight: 'bold', textAlign: 'right' },
+  profileBtn: { padding: 5 },
   
-  // Sale Card Style (مثل التقارير)
-  saleCard: { flexDirection: 'row', alignItems: 'center', padding: 15, borderRadius: 18, marginBottom: 12 },
-  priceTag: { alignItems: 'center', minWidth: 70 },
-  amountText: { fontSize: 18, fontWeight: 'bold' },
-  saleInfo: { flex: 1, alignItems: 'flex-end', marginRight: 15 },
-  saleId: { fontSize: 15, fontWeight: 'bold' },
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  dateText: { fontSize: 12 },
-  statusBadge: { padding: 5 },
+  summaryContainer: { marginBottom: 30 },
+  mainSummaryCard: { backgroundColor: '#1C1C1E', padding: 25, borderRadius: 20, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#333' },
+  summaryLabel: { color: '#888', fontSize: 14, marginBottom: 8 },
+  summaryValue: { color: '#00E676', fontSize: 36, fontWeight: 'bold' },
+  badge: { backgroundColor: 'rgba(0, 230, 118, 0.1)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 10, marginTop: 10 },
+  badgeText: { color: '#00E676', fontSize: 12, fontWeight: 'bold' },
 
-  // Modal Style
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
-  modalContent: { borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 20, height: '70%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold' },
-  itemRow: { flexDirection: 'row', paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#333' },
-  itemName: { fontSize: 16, fontWeight: 'bold' },
-  itemTotal: { fontSize: 16, fontWeight: 'bold' },
-  modalFooter: { paddingTop: 20, borderTopWidth: 1, alignItems: 'center' },
-  finalPrice: { fontSize: 28, fontWeight: 'bold', marginBottom: 15 },
-  printBtn: { flexDirection: 'row', width: '100%', padding: 16, borderRadius: 15, justifyContent: 'center', alignItems: 'center', gap: 10 },
-  printBtnText: { fontSize: 18, fontWeight: 'bold' }
+  row: { flexDirection: 'row', justifyContent: 'space-between' },
+  subCard: { backgroundColor: '#1C1C1E', width: '48%', padding: 15, borderRadius: 15 },
+  subLabel: { color: '#888', fontSize: 12, marginBottom: 5 },
+  subValue: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
+
+  sectionTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'right' },
+  actionsGrid: { flexDirection: 'row-reverse', flexWrap: 'wrap', justifyContent: 'space-between' },
+  actionCard: { backgroundColor: '#1C1C1E', width: '48%', padding: 20, borderRadius: 20, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#2C2C2E' },
+  iconContainer: { padding: 15, borderRadius: 15, marginBottom: 12 },
+  actionTitle: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+
+  tipCard: { flexDirection: 'row-reverse', backgroundColor: '#111', padding: 15, borderRadius: 15, alignItems: 'center', marginTop: 10, marginBottom: 50, borderWidth: 1, borderColor: '#00E67633' },
+  tipText: { color: '#AAA', fontSize: 13, flex: 1, textAlign: 'right', marginRight: 10 }
 });
